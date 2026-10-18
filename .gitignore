@@ -1,0 +1,5 @@
+/app
+*.out
+sbom.*
+*.sarif
+.DS_Store

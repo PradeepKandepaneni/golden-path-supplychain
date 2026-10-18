@@ -1,0 +1,53 @@
+# A cluster admission policy (Kyverno) that REJECTS any pod in the target
+# namespace that isn't hardened. This is the "policy as code" piece: the
+# golden path's security posture stops being a suggestion in a YAML file and
+# becomes a rule the cluster enforces at admission time.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pod-hardening
+spec:
+  validationFailureAction: Enforce   # reject, don't just warn
+  background: false
+  rules:
+    - name: must-run-nonroot
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["golden-path"]
+      validate:
+        message: "Pods must set runAsNonRoot=true."
+        pattern:
+          spec:
+            =(securityContext):
+              =(runAsNonRoot): true
+            containers:
+              - =(securityContext):
+                  =(runAsNonRoot): true
+    - name: must-drop-all-caps
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["golden-path"]
+      validate:
+        message: "Containers must drop ALL Linux capabilities."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  capabilities:
+                    drop: ["ALL"]
+    - name: no-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["golden-path"]
+      validate:
+        message: "Images must not use the :latest tag (use an immutable digest or SHA tag)."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"

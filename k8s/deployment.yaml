@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golden-path
+  namespace: golden-path
+  labels:
+    app: golden-path
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: golden-path
+  template:
+    metadata:
+      labels:
+        app: golden-path
+    spec:
+      containers:
+        - name: golden-path
+          image: golden-path:ci   # CI rewrites to the immutable SHA tag
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

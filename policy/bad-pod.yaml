@@ -1,0 +1,14 @@
+# This pod violates all three rules: it runs as root, keeps capabilities, and
+# uses :latest. The CI job applies it and asserts Kyverno REJECTS it. If the
+# cluster accepted this, the policy would be theatre.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad-pod
+  namespace: golden-path
+spec:
+  containers:
+    - name: bad
+      image: nginx:latest
+      securityContext:
+        runAsNonRoot: false
