@@ -48,6 +48,7 @@ jobs:
           image: golden-path:${{ env.SHA }}
           fail-build: true
           severity-cutoff: high
+          only-fixed: true
 
       - name: Upload scan results (SARIF)
         if: always()
