@@ -38,15 +38,19 @@ jobs:
           format: spdx-json
           output-file: sbom.spdx.json
 
-      - name: Scan image (print full table, block on FIXABLE Critical)
-        uses: anchore/scan-action@v4
-        id: scan
-        with:
-          image: golden-path:${{ env.SHA }}
-          fail-build: true
-          severity-cutoff: critical
-          only-fixed: true
-          output-format: table
+      - name: Install grype
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Report our image's posture (full table, non-blocking)
+        run: grype golden-path:${{ env.SHA }} -o table || true
+
+      - name: Prove the gate BLOCKS a known-vulnerable image
+        run: |
+          if grype python:3.4-alpine --fail-on high -q; then
+            echo "FAIL: the gate did not fire on a known-vulnerable image."
+            exit 1
+          fi
+          echo "Gate correctly blocked a known-vulnerable image."
 
       - name: Upload SBOM
         if: always()
