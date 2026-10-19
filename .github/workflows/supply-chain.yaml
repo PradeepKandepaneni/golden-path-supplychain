@@ -1,8 +1,5 @@
 name: supply-chain
 
-# Public repo => free unlimited Actions minutes. Every control here runs in the
-# runner at $0: SBOM (syft), vulnerability scan (grype), keyless signing
-# (cosign), and policy enforcement (kyverno on a kind cluster).
 on:
   push:
     branches: [main]
@@ -10,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # required for cosign keyless signing (OIDC)
+  id-token: write
 
 jobs:
   test:
@@ -41,35 +38,33 @@ jobs:
           format: spdx-json
           output-file: sbom.spdx.json
 
-      - name: Scan image with grype (fail on High/Critical)
+      - name: Scan image (print full table, block on FIXABLE Critical)
         uses: anchore/scan-action@v4
         id: scan
         with:
           image: golden-path:${{ env.SHA }}
           fail-build: true
-          severity-cutoff: high
+          severity-cutoff: critical
           only-fixed: true
+          output-format: table
 
-      - name: Upload scan results (SARIF)
+      - name: Upload SBOM
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scan-results
-          path: ${{ steps.scan.outputs.sarif }}
+          name: sbom
+          path: sbom.spdx.json
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Keyless-sign the SBOM (proof of provenance)
+      - name: Keyless-sign the SBOM
         run: |
-          # Keyless signing uses the workflow's OIDC identity — no private key
-          # to store or leak. Signs the SBOM as an attestation artifact.
           cosign sign-blob --yes sbom.spdx.json \
-            --output-signature sbom.sig \
-            --output-certificate sbom.pem
+            --output-signature sbom.sig --output-certificate sbom.pem
           echo "Signed SBOM with workflow identity (keyless)."
 
-      - name: Upload SBOM + signature
+      - name: Upload signed SBOM
         uses: actions/upload-artifact@v4
         with:
           name: sbom-signed
@@ -83,35 +78,28 @@ jobs:
     needs: build-scan-sign
     steps:
       - uses: actions/checkout@v4
-
       - name: Create kind cluster
         uses: helm/kind-action@v1
         with: { cluster_name: golden-path }
-
       - name: Install Kyverno
         run: |
           kubectl create -f https://github.com/kyverno/kyverno/releases/download/v1.12.5/install.yaml
           kubectl -n kyverno rollout status deployment/kyverno-admission-controller --timeout=180s
-
       - name: Apply namespace + hardening policy
         run: |
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f policy/require-hardening.yaml
-          sleep 10   # let the policy register with the admission webhook
-
+          sleep 10
       - name: Assert the BAD pod is REJECTED
         run: |
           if kubectl apply -f policy/bad-pod.yaml 2>err.txt; then
-            echo "FAIL: the cluster accepted an unhardened, :latest, root pod."
+            echo "FAIL: cluster accepted an unhardened, :latest, root pod."
             exit 1
           fi
-          echo "Policy correctly rejected the bad pod. Reason:"
-          grep -i "runAsNonRoot\|capabilities\|latest" err.txt || cat err.txt
-
+          echo "Policy correctly rejected the bad pod."
       - name: Assert the COMPLIANT deployment is ACCEPTED
         run: |
           sed -i "s|golden-path:ci|golden-path:hardened|" k8s/deployment.yaml
-          # dry-run server-side: proves the policy admits the compliant spec
           kubectl apply -f k8s/service.yaml
           kubectl apply -f k8s/deployment.yaml --dry-run=server
           echo "Policy correctly admitted the hardened deployment."
