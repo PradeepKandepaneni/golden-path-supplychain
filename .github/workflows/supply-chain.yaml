@@ -24,26 +24,21 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
-
       - name: Build image (immutable SHA tag)
         run: |
           SHA="${GITHUB_SHA::7}"
           echo "SHA=$SHA" >> "$GITHUB_ENV"
           docker build -t golden-path:$SHA --build-arg VERSION=$SHA .
-
       - name: Generate SBOM with syft
         uses: anchore/sbom-action@v0
         with:
           image: golden-path:${{ env.SHA }}
           format: spdx-json
           output-file: sbom.spdx.json
-
       - name: Install grype
         run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-
       - name: Report our image's posture (full table, non-blocking)
         run: grype golden-path:${{ env.SHA }} -o table || true
-
       - name: Prove the gate BLOCKS a known-vulnerable image
         run: |
           if grype python:3.4-alpine --fail-on high -q; then
@@ -51,23 +46,19 @@ jobs:
             exit 1
           fi
           echo "Gate correctly blocked a known-vulnerable image."
-
       - name: Upload SBOM
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sbom
           path: sbom.spdx.json
-
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
-
       - name: Keyless-sign the SBOM
         run: |
           cosign sign-blob --yes sbom.spdx.json \
             --output-signature sbom.sig --output-certificate sbom.pem
           echo "Signed SBOM with workflow identity (keyless)."
-
       - name: Upload signed SBOM
         uses: actions/upload-artifact@v4
         with:
@@ -85,14 +76,21 @@ jobs:
       - name: Create kind cluster
         uses: helm/kind-action@v1
         with: { cluster_name: golden-path }
-      - name: Install Kyverno
+      - name: Install Kyverno and wait for ALL controllers
         run: |
           kubectl create -f https://github.com/kyverno/kyverno/releases/download/v1.12.5/install.yaml
-          kubectl -n kyverno rollout status deployment/kyverno-admission-controller --timeout=180s
-      - name: Apply namespace + hardening policy
+          kubectl -n kyverno wait --for=condition=available deploy --all --timeout=180s
+          sleep 20   # let the admission webhook endpoints register
+      - name: Apply namespace + hardening policy (retry until webhook is ready)
         run: |
           kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f policy/require-hardening.yaml
+          for i in $(seq 1 15); do
+            if kubectl apply -f policy/require-hardening.yaml; then
+              echo "policy applied"; break
+            fi
+            echo "kyverno webhook not ready, retry $i..."; sleep 10
+          done
+          kubectl get clusterpolicy require-pod-hardening
           sleep 10
       - name: Assert the BAD pod is REJECTED
         run: |
